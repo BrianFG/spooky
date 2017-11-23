@@ -3,7 +3,12 @@ import pandas as pd
 import re
 import matplotlib.pyplot as plt
 import numpy as np
+import spacy 
 from functools import reduce
+from sklearn import tree
+import graphviz 
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 
 
 def intersect(a, b):
@@ -129,4 +134,40 @@ def main():
 	
 
 
-main()
+def create_tree():
+	alls = pd.read_csv("./train.csv")
+	df = alls[:320]
+
+	npl = spacy.load("en")
+	df["npl"] = df["text"].apply(lambda x : npl(x.decode("UTF-8")))
+	df["tokens"] = df["npl"].str.len()
+	df["words"] = df["npl"].apply(lambda x: len([token for token in x if token.is_stop != True and token.is_punct != True ]))
+	df["sents"] = df["npl"].apply(lambda x: len([sent for sent in x.sents]))
+	df["words_per_sentence"] = df["words"]/df["sents"]
+
+
+	train_X = df[["tokens" , "words" , "words_per_sentence" ]][:250]
+	train_Y = df["author"][:250]
+
+	test_X = df[["tokens" , "words" , "words_per_sentence" ]][251:]
+	test_Y = df["author"][251:]
+
+
+	model = tree.DecisionTreeClassifier()
+	model.fit(train_X, train_Y)
+	#print model
+
+	dot_data = tree.export_graphviz(model, out_file=None) 
+	graph = graphviz.Source(dot_data) 
+	graph.render("author", view=True) 
+	#print graph
+
+	y_predict = model.predict(test_X)
+	accuracy  =accuracy_score(test_Y, y_predict)
+	print accuracy
+
+
+
+
+
+create_tree()
