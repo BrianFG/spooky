@@ -14,7 +14,7 @@ from spacy import attrs
 from spacy.symbols import VERB, NOUN, ADV, ADJ
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
-
+import scipy.stats as stats
 
 def intersect(a, b):
     return list(set(a) & set(b))
@@ -166,7 +166,7 @@ def calculate_frequencies(df, ignored):
 
 def process_data(df):
 
-	frequencies = calculate_frequencies(df, 235)
+	frequencies = calculate_frequencies(df, 220)
 
 	maping = {"EAP":1 , "HPL": 2, "MWS":3 , "-1":0}
 
@@ -200,20 +200,42 @@ def create_tree():
 
 
 	alls = pd.read_csv("./train.csv")
-	df = alls[:500]
+	df = alls.ix[np.random.choice(alls.index, 5000)]
 	df = process_data(df)
+	df = df.replace([np.inf, -np.inf], np.nan)
+	df = df.dropna()
 
+
+	grouped = df.groupby("author")
 	
+	for key, value in grouped:
+		verbs = sorted(value["verb_freq"])
+		fit = stats.norm.pdf(verbs, np.mean(verbs), np.std(verbs)) 
+
+		plt.plot(verbs,fit)      #use this to draw histogram of your data
+
+		#plt.show()    
+
+	#grouped["EAP"].plot(kind="bar")
+	#plt.show()
+
+	#plt.plot()
+	#plt.xlabel("#Deleted words")
+	#plt.ylabel("Accuracy")
+	#plt.title("Accuracy increments")
+	#plt.savefig("accuracy.png")
 
 
-	cols = ["freq_pred" , "words_per_sentence" , "puncts_per_sentence", "commas_per_sentence", "verb_freq" ]
+
+
+	cols = ["freq_pred" , "words_per_sentence" , "puncts_per_sentence", "commas_per_sentence", "verb_freq" , "adj_freq" , "noun_freq"]
 
 
 	train_X, test_X, train_Y, test_Y = train_test_split(df[cols], df["author"], random_state=1)
 
 	
 	
-	clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1)
+	clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(7, 2), random_state=1)
 	clf.fit(train_X, train_Y)
 	prediction = clf.predict(test_X)
 	print accuracy_score(test_Y, prediction)
@@ -226,7 +248,7 @@ def create_tree():
                          filled=True, rounded=True,  
                          special_characters=True) 
 	graph = graphviz.Source(dot_data)
-	graph.render("author", view=True) 
+	graph.render("author") 
 	#print graph
 
 	y_predict = model.predict(test_X)
