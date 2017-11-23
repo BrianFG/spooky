@@ -9,6 +9,11 @@ from sklearn import tree
 import graphviz 
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
+from sklearn import preprocessing
+from spacy import attrs
+from spacy.symbols import VERB, NOUN, ADV, ADJ
+from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import train_test_split
 
 
 def intersect(a, b):
@@ -37,11 +42,13 @@ def text_owner(text, frequencies):
 		intersected = frequencies.get(key).filter(items=tokens)
 		##Avoid NaN values
 		if len(intersected) == 0:
-			pred.loc[key] = [0.00000000001]
+			pred.loc[key] = [-0.1]
 		else:
 			pred.loc[key] = [intersected.sum()]
-		
-	return pred.idxmax(axis=0)[0]
+	if pred.max(axis=0)[0] < 0:
+		return "-1"
+	else:
+		return pred.idxmax(axis=0)[0]
 
 def create_plots(frequencies, limit, name):
 	for key in frequencies:
@@ -64,7 +71,14 @@ def plot_confusion_matrix(matrix):
 	plt.xlabel(matrix.columns.name)
 	#plt.colorbar()
 	#plt.show()
-	
+
+def token_group(group):
+	group_tokens = {}
+	for key, value in group:
+		all_text = value["text"].str.cat(sep=" ")
+		tokens = tokenize(all_text)
+		group_tokens[key] = tokens	
+	return group_tokens
 
 def main():
 
@@ -131,34 +145,87 @@ def main():
 	plt.ylabel("Accuracy")
 	plt.title("Accuracy increments")
 	plt.savefig("accuracy.png")
-	
 
 
-def create_tree():
-	alls = pd.read_csv("./train.csv")
-	df = alls[:320]
+def calculate_frequencies(df, ignored):
+	authors = df.groupby("author")
+	author_tokens= token_group(authors)
+	author_frequency = {}
+	for key, value in authors:
+		tokens = author_tokens[key]
+		frequencies = pd.Series(tokens).value_counts()
+		author_frequency[key] =frequencies.div(len(tokens)) 
+	rep = most_frequent(author_frequency, ignored)
+	frequencies = {}
+	for key, value in authors:
+		tokens = list(filter(lambda x: x not in rep, author_tokens[key]))
+		counts = pd.Series(tokens).value_counts()
+		frequencies[key] = counts.div(len(tokens))
+
+	return frequencies
+
+def process_data(df):
+
+	frequencies = calculate_frequencies(df, 235)
+
+	maping = {"EAP":1 , "HPL": 2, "MWS":3 , "-1":0}
 
 	npl = spacy.load("en")
+	df["freq_p"] = df["text"].apply(lambda x: text_owner(x,frequencies))
+	df["freq_pred"] = df["freq_p"].apply(lambda x: maping[x])
+
+
+
 	df["npl"] = df["text"].apply(lambda x : npl(x.decode("UTF-8")))
 	df["tokens"] = df["npl"].str.len()
 	df["words"] = df["npl"].apply(lambda x: len([token for token in x if token.is_stop != True and token.is_punct != True ]))
 	df["sents"] = df["npl"].apply(lambda x: len([sent for sent in x.sents]))
+	df["punctuations"] = df["npl"].apply(lambda x : len([token for token in x if token.is_punct]))
+	df["commas"] = df["npl"].apply(lambda x : len([token for token in x if token.string.strip() == ","]))
 	df["words_per_sentence"] = df["words"]/df["sents"]
+	df["puncts_per_sentence"] = df["punctuations"]/df["sents"]
+	df["commas_per_sentence"] = df["commas"]/df["sents"]
+	df["pos_counts"] = df["npl"].apply(lambda x: x.count_by(attrs.POS))
+	df["nouns"] = df["pos_counts"].apply(lambda x: x[NOUN.numerator] if NOUN in x else 0)
+	df["noun_freq"] = df["nouns"]/df["words"]
+	df["verbs"] = df["pos_counts"].apply(lambda x: x[VERB.numerator] if VERB in x else 0)
+	df["verb_freq"] = df["verbs"]/df["words"]
+	df["adjs"] = df["pos_counts"].apply(lambda x: x[ADJ.numerator] if ADJ in x else 0)
+	df["adj_freq"] = df["adjs"]/df["words"]
+	return df
 
 
-	train_X = df[["tokens" , "words" , "words_per_sentence" ]][:250]
-	train_Y = df["author"][:250]
+def create_tree():
 
-	test_X = df[["tokens" , "words" , "words_per_sentence" ]][251:]
-	test_Y = df["author"][251:]
 
+
+	alls = pd.read_csv("./train.csv")
+	df = alls[:500]
+	df = process_data(df)
+
+	
+
+
+	cols = ["freq_pred" , "words_per_sentence" , "puncts_per_sentence", "commas_per_sentence", "verb_freq" ]
+
+
+	train_X, test_X, train_Y, test_Y = train_test_split(df[cols], df["author"], random_state=1)
+
+	
+	
+	clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1)
+	clf.fit(train_X, train_Y)
+	prediction = clf.predict(test_X)
+	print accuracy_score(test_Y, prediction)
 
 	model = tree.DecisionTreeClassifier()
 	model.fit(train_X, train_Y)
 	#print model
 
-	dot_data = tree.export_graphviz(model, out_file=None) 
-	graph = graphviz.Source(dot_data) 
+	dot_data = tree.export_graphviz(model, out_file=None,  feature_names=cols,  class_names=["EAP" , "HPL" , "MWS"],  
+                         filled=True, rounded=True,  
+                         special_characters=True) 
+	graph = graphviz.Source(dot_data)
 	graph.render("author", view=True) 
 	#print graph
 
