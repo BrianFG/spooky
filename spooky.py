@@ -15,6 +15,9 @@ from spacy.symbols import VERB, NOUN, ADV, ADJ
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
 import scipy.stats as stats
+import cPickle as pickle
+import os.path
+
 
 def intersect(a, b):
     return list(set(a) & set(b))
@@ -166,16 +169,21 @@ def calculate_frequencies(df, ignored):
 
 def process_data(df):
 
-	frequencies = calculate_frequencies(df, 220)
+	frequencies = {}
+	if os.path.exists("./frequencies.p"):
+		frequencies = pickle.load( open( "./frequencies.p", "rb" ) )
+	else:
+		frequencies = calculate_frequencies(df, 235)
+		pickle.dump(frequencies, open( "frequencies.p", "wb" ))
+
+	
+	
 
 	maping = {"EAP":1 , "HPL": 2, "MWS":3 , "-1":0}
 
 	npl = spacy.load("en")
 	df["freq_p"] = df["text"].apply(lambda x: text_owner(x,frequencies))
 	df["freq_pred"] = df["freq_p"].apply(lambda x: maping[x])
-
-
-
 	df["npl"] = df["text"].apply(lambda x : npl(x.decode("UTF-8")))
 	df["tokens"] = df["npl"].str.len()
 	df["words"] = df["npl"].apply(lambda x: len([token for token in x if token.is_stop != True and token.is_punct != True ]))
@@ -192,41 +200,72 @@ def process_data(df):
 	df["verb_freq"] = df["verbs"]/df["words"]
 	df["adjs"] = df["pos_counts"].apply(lambda x: x[ADJ.numerator] if ADJ in x else 0)
 	df["adj_freq"] = df["adjs"]/df["words"]
+	df["advs"] = df["pos_counts"].apply(lambda x: x[ADV.numerator] if ADV in x else 0)
+	df["adv_freq"] = df["advs"]/df["words"]
 	return df
 
 
-def create_tree():
+def plot_group_data(gp):
+	groups = gp.groups.keys()
 
+	for feature in ["noun_freq" , "adj_freq" , "verb_freq" , "adv_freq" ]:
+		for key, value in gp:
+			vals = 1/value[feature]
+			vals = vals.replace([np.inf, -np.inf], np.nan)
+			vals = vals.dropna()
+			verbs = sorted(vals)
+			fit = stats.norm.pdf(verbs, np.mean(verbs), np.std(verbs)) 
+			#plt.plot(verbs,fit,'-o')
+			plt.plot(verbs,fit) 
+		plt.legend(groups)
+		#plt.show()  
 
-
-	alls = pd.read_csv("./train.csv")
-	df = alls.ix[np.random.choice(alls.index, 1000)]
-	df = process_data(df)
-	df = df.replace([np.inf, -np.inf], np.nan)
-	df = df.dropna()
-
-
-	grouped = df.groupby("author")
-	
-	for key, value in grouped:
-		verbs = sorted(value["verb_freq"])
-		fit = stats.norm.pdf(verbs, np.mean(verbs), np.std(verbs)) 
-
-		plt.plot(verbs,fit)      #use this to draw histogram of your data
-
+	for feature in ["words_per_sentence" , "commas_per_sentence" , "puncts_per_sentence" ]:
+		for key, value in gp:
+			vals = value[feature]
+			vals = vals.replace([np.inf, -np.inf], np.nan)
+			vals = vals.dropna()
+			verbs = sorted(vals)
+			fit = stats.norm.pdf(verbs, np.mean(verbs), np.std(verbs)) 
+			#plt.plot(verbs,fit,'-o')
+			plt.plot(verbs,fit) 
+		plt.legend(groups)
 		#plt.show()    
 
 
 
+def create_tree():
 
-	cols = ["freq_pred" , "words_per_sentence" , "puncts_per_sentence", "commas_per_sentence", "verb_freq" , "adj_freq" , "noun_freq" , "commas"]
+	df = None
+	if os.path.exists("./authorsDF.p"):
+		df = pd.read_pickle("./authorsDF.p")
+	else:
+		df = pd.read_csv("./train.csv")
+		df = process_data(df)
+		df = df.replace([np.inf, -np.inf], np.nan)
+		df = df.dropna()
+		df = df.drop(["npl"], axis=1)
+		df.to_pickle("./authorsDF.p")
+
+	
+
+	
+
+
+	grouped = df.groupby("author")
+	plot_group_data(grouped)
+
+
+
+
+	cols = ["freq_pred" , "words_per_sentence"  ,"puncts_per_sentence" , "commas_per_sentence", "verb_freq" , "adj_freq"]
 
 
 	train_X, test_X, train_Y, test_Y = train_test_split(df[cols], df["author"], random_state=1)
 
 	
 	
-	clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(7, 2), random_state=1)
+	clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(15, 2), random_state=1)
 	clf.fit(train_X, train_Y)
 	prediction = clf.predict(test_X)
 	print accuracy_score(test_Y, prediction)
@@ -238,8 +277,8 @@ def create_tree():
 	dot_data = tree.export_graphviz(model, out_file=None,  feature_names=cols,  class_names=["EAP" , "HPL" , "MWS"],  
                          filled=True, rounded=True,  
                          special_characters=True) 
-	graph = graphviz.Source(dot_data)
-	graph.render("author") 
+	#graph = graphviz.Source(dot_data)
+	#graph.render("author") 
 	#print graph
 
 	y_predict = model.predict(test_X)
@@ -267,7 +306,7 @@ def spacy_predictions():
 	for key, value in authors:
 		all_text = value["text"].str.cat(sep=" ")
 		tokens = nlp(all_text.decode("UTF-8"))
-		lemmas = [token.lemma for token in tokens if not (token.is_stop or token.is_punct)]
+		lemmas = [token for token in tokens if not (token.is_stop or token.is_punct)]
 		group_tokens[key] = lemmas
 
 	frequencies = {}
@@ -277,7 +316,7 @@ def spacy_predictions():
 		frequencies[key] = counts.div(len(tokens))
 
 	df["nlp"] = df["text"].apply(lambda x : nlp(x.decode("UTF-8")))
-	df["lemmas"] = df["nlp"].apply(lambda x: [token.lemma for token in x])
+	df["lemmas"] = df["nlp"].apply(lambda x: [token for token in x])
 
 
 	cols = ["lemmas"]
@@ -287,4 +326,6 @@ def spacy_predictions():
 	print accuracy_score(test_Y, pred_Y)
 
 
+pd.options.mode.chained_assignment = None
 create_tree()
+
