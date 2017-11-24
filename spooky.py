@@ -200,7 +200,7 @@ def create_tree():
 
 
 	alls = pd.read_csv("./train.csv")
-	df = alls.ix[np.random.choice(alls.index, 5000)]
+	df = alls.ix[np.random.choice(alls.index, 1000)]
 	df = process_data(df)
 	df = df.replace([np.inf, -np.inf], np.nan)
 	df = df.dropna()
@@ -216,19 +216,10 @@ def create_tree():
 
 		#plt.show()    
 
-	#grouped["EAP"].plot(kind="bar")
-	#plt.show()
-
-	#plt.plot()
-	#plt.xlabel("#Deleted words")
-	#plt.ylabel("Accuracy")
-	#plt.title("Accuracy increments")
-	#plt.savefig("accuracy.png")
 
 
 
-
-	cols = ["freq_pred" , "words_per_sentence" , "puncts_per_sentence", "commas_per_sentence", "verb_freq" , "adj_freq" , "noun_freq"]
+	cols = ["freq_pred" , "words_per_sentence" , "puncts_per_sentence", "commas_per_sentence", "verb_freq" , "adj_freq" , "noun_freq" , "commas"]
 
 
 	train_X, test_X, train_Y, test_Y = train_test_split(df[cols], df["author"], random_state=1)
@@ -257,6 +248,43 @@ def create_tree():
 
 
 
+def lemma_freq(lemmas, frequencies):
+	pred = pd.DataFrame(columns=['Prediction'])
+	for key in frequencies:
+		intersected = frequencies.get(key).filter(items=lemmas)
+		if len(intersected) < 1:
+			pred.loc[key] = 0.0
+		else:
+			pred.loc[key] = [intersected.sum()]
+	return pred.idxmax(axis=0)[0]
+
+def spacy_predictions():
+	df = pd.read_csv("./train.csv")
+	df = df.ix[np.random.choice(df.index, 1000)]
+	nlp = spacy.load("en")
+	authors = df.groupby("author")
+	group_tokens = {}
+	for key, value in authors:
+		all_text = value["text"].str.cat(sep=" ")
+		tokens = nlp(all_text.decode("UTF-8"))
+		lemmas = [token.lemma for token in tokens if not (token.is_stop or token.is_punct)]
+		group_tokens[key] = lemmas
+
+	frequencies = {}
+	for key, value in authors:
+		tokens = group_tokens[key]
+		counts = pd.Series(tokens).value_counts()
+		frequencies[key] = counts.div(len(tokens))
+
+	df["nlp"] = df["text"].apply(lambda x : nlp(x.decode("UTF-8")))
+	df["lemmas"] = df["nlp"].apply(lambda x: [token.lemma for token in x])
+
+
+	cols = ["lemmas"]
+	train_X, test_X, train_Y, test_Y = train_test_split(df[cols], df["author"], random_state=1)
+
+	pred_Y = test_X["lemmas"].apply(lambda x: lemma_freq(x, frequencies))
+	print accuracy_score(test_Y, pred_Y)
 
 
 create_tree()
