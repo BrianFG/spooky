@@ -6,38 +6,48 @@ import numpy as np
 import spacy 
 from functools import reduce
 from sklearn import tree
+from sklearn import svm
 import graphviz 
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 from spacy import attrs
-from spacy.symbols import VERB, NOUN, ADV, ADJ
+from spacy.symbols import VERB, NOUN, ADV, ADJ , PROPN
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
 import scipy.stats as stats
 import cPickle as pickle
 import os.path
+import random
+import itertools
 
 
+
+## Returns the intersection between 2 lists
 def intersect(a, b):
     return list(set(a) & set(b))
 
 
+## Returns the most frequent values between lists in a dictionary. Takes *limit* from each list
 def most_frequent(dic, limit):
 	li = []
 	for key in dic:
 		li.append(dic[key].index.values.tolist()[:limit])
 	return reduce((lambda x, y: intersect(x,y)) , li)
 
+## Splits a string into a word list
 def tokenize(text):
 	clean_text = re.sub(r'["]|[,]|[.]|[:]|[?]|[!]|[;]|[(]|[)]', ' ', text.lower())
 	return clean_text.split()
 
+
+## Slits a string into words list and eliminates words contained in [words] list
 def tokenize_filter(text, words):
 	clean_text = re.sub(r'["]|[,]|[.]|[:]|[?]|[!]|[;]|[(]|[)]', ' ', text.lower())
 	tokens = clean_text.split()
 	return list(filter(lambda x: x not in words, tokens))
 
+## Calculates word frequency to predict the test author
 def text_owner(text, frequencies):
 	tokens = tokenize(text)
 	pred = pd.DataFrame(columns=['Prediction'])
@@ -53,19 +63,22 @@ def text_owner(text, frequencies):
 	else:
 		return pred.idxmax(axis=0)[0]
 
+## Generates word frequency plots
 def create_plots(frequencies, limit, name):
 	for key in frequencies:
 		frequencies.get(key)[:limit].plot(kind="bar")
 		plt.savefig(key +  name + ".png")
 		plt.clf()
 
+## Calculates acuray from a confusion matrix (crosstab)
 def accuracy(matrix):
 	return (matrix * np.eye(len(matrix))).values.sum() / matrix.values.sum()
 
 
+## Plots a confusion matrix
 def plot_confusion_matrix(matrix):
 	matrix =  matrix / matrix.sum(axis=1)
-	plt.matshow(matrix, cmap=plt.cm.Blues)
+	plt.matshow(matrix, cmap=plt.cm.BuPu)
 	plt.colorbar()
 	tick_marks = np.arange(len(matrix.columns))
 	plt.xticks(tick_marks, matrix.columns, rotation=45)
@@ -75,6 +88,7 @@ def plot_confusion_matrix(matrix):
 	#plt.colorbar()
 	#plt.show()
 
+## Tokenize text by author and returns a dictionary {author : tokens list}
 def token_group(group):
 	group_tokens = {}
 	for key, value in group:
@@ -83,8 +97,10 @@ def token_group(group):
 		group_tokens[key] = tokens	
 	return group_tokens
 
-def main():
 
+# Some tests to identify the best way to get word frequencies
+# Instead of ignoring stop words, it ignores the most frequen words between authors.
+def word_frequency_test():
 	lines = pd.read_csv("./train.csv")
 	authors = lines.groupby("author")
 	
@@ -173,159 +189,194 @@ def process_data(df):
 	if os.path.exists("./frequencies.p"):
 		frequencies = pickle.load( open( "./frequencies.p", "rb" ) )
 	else:
-		frequencies = calculate_frequencies(df, 235)
+		# value (235) based on a previous experiment
+		# This will take the 235 most frequent words from each author and ignore intersactions 
+		frequencies = calculate_frequencies(df, 235) 
 		pickle.dump(frequencies, open( "frequencies.p", "wb" ))
 
 	
-	
-
 	maping = {"EAP":1 , "HPL": 2, "MWS":3 , "-1":0}
 
-	npl = spacy.load("en")
+	nlp = spacy.load("en")
 	df["freq_p"] = df["text"].apply(lambda x: text_owner(x,frequencies))
 	df["freq_pred"] = df["freq_p"].apply(lambda x: maping[x])
-	df["npl"] = df["text"].apply(lambda x : npl(x.decode("UTF-8")))
-	df["tokens"] = df["npl"].str.len()
-	df["words"] = df["npl"].apply(lambda x: len([token for token in x if token.is_stop != True and token.is_punct != True ]))
-	df["sents"] = df["npl"].apply(lambda x: len([sent for sent in x.sents]))
-	df["punctuations"] = df["npl"].apply(lambda x : len([token for token in x if token.is_punct]))
-	df["commas"] = df["npl"].apply(lambda x : len([token for token in x if token.string.strip() == ","]))
-	df["words_per_sentence"] = df["words"]/df["sents"]
-	df["puncts_per_sentence"] = df["punctuations"]/df["sents"]
-	df["commas_per_sentence"] = df["commas"]/df["sents"]
-	df["pos_counts"] = df["npl"].apply(lambda x: x.count_by(attrs.POS))
-	df["nouns"] = df["pos_counts"].apply(lambda x: x[NOUN.numerator] if NOUN in x else 0)
-	df["noun_freq"] = df["nouns"]/df["words"]
-	df["verbs"] = df["pos_counts"].apply(lambda x: x[VERB.numerator] if VERB in x else 0)
-	df["verb_freq"] = df["verbs"]/df["words"]
-	df["adjs"] = df["pos_counts"].apply(lambda x: x[ADJ.numerator] if ADJ in x else 0)
-	df["adj_freq"] = df["adjs"]/df["words"]
-	df["advs"] = df["pos_counts"].apply(lambda x: x[ADV.numerator] if ADV in x else 0)
-	df["adv_freq"] = df["advs"]/df["words"]
+
+	df["nlp"]    = df["text"].apply(lambda x : nlp(x.decode("UTF-8")))
+
+	df["tokens"] = df["nlp"].str.len()
+	df["sents"]  = df["nlp"].apply(lambda x: len([sent for sent in x.sents]))
+	df["words"]  = df["nlp"].apply(lambda x: len([token for token in x if token.is_stop != True and token.is_punct != True ]))
+	df["stops"]  = df["nlp"].apply(lambda x: len([token for token in x if token.is_stop ]))
+	df["puncts"] = df["nlp"].apply(lambda x: len([token for token in x if token.is_punct]))
+	df["commas"] = df["nlp"].apply(lambda x: len([token for token in x if token.string.strip() == ","]))
+
+	#Calculating different features per sentence
+	df["Words per sentence"]  = df["words"]/df["sents"]
+	df["Puncts per sentence"] = df["puncts"]/df["sents"]
+	df["Commas per sentence"] = df["commas"]/df["sents"]
+	df["Stops per sentence"]  = df["stops"]/df["sents"]
+
+
+	#Part of Speech analysis (counts)
+	df["pos"]    = df["nlp"].apply(lambda x: x.count_by(attrs.POS))
+	df["nouns"]  = df["pos"].apply(lambda x: x[NOUN.numerator] if NOUN in x else 0)
+	df["verbs"]  = df["pos"].apply(lambda x: x[VERB.numerator] if VERB in x else 0)
+	df["adjs"]   = df["pos"].apply(lambda x: x[ADJ.numerator] if ADJ in x else 0)
+	df["advs"]   = df["pos"].apply(lambda x: x[ADV.numerator] if ADV in x else 0)
+	df["propns"] = df["pos"].apply(lambda x: x[PROPN.numerator] if PROPN in x else 0)
+	
+	# part of speech frequency , POS:word ratio
+	df["Noun Frequency"]   = df["nouns"]/df["words"]
+	df["Verb Frequency"]   = df["verbs"]/df["words"]
+	df["Adj Frequency"]    = df["adjs"] /df["words"]
+	df["Adverb Frequency"] = df["advs"] /df["words"]
+	df["PropN Frequency"]  = df["propns"] /df["words"]
+
+
 	return df
 
 
 def plot_group_data(gp):
 	groups = gp.groups.keys()
 
-	for feature in ["noun_freq" , "adj_freq" , "verb_freq" , "adv_freq" ]:
+	for feature in ["Noun Frequency" , "Adj Frequency" , "Verb Frequency" , "Adverb Frequency" , "PropN Frequency" ]:
 		for key, value in gp:
-			vals = 1/value[feature]
-			vals = vals.replace([np.inf, -np.inf], np.nan)
-			vals = vals.dropna()
+			values = value[value[feature] >0]
+			vals = 1/values[feature]
 			verbs = sorted(vals)
 			fit = stats.norm.pdf(verbs, np.mean(verbs), np.std(verbs)) 
-			#plt.plot(verbs,fit,'-o')
+			#plt.plot(verbs,fit,'ro')
 			plt.plot(verbs,fit) 
 		plt.legend(groups)
-		#plt.show()  
+		plt.title(feature)
+		plt.xlabel("Word : " + feature.split()[0] + " ratio" )
+		plt.ylabel("Frenquency")
+		plt.savefig("dist_" + feature + ".png")
+		plt.clf() 
 
-	for feature in ["words_per_sentence" , "commas_per_sentence" , "puncts_per_sentence" ]:
+	for feature in ["words" , "sents" , "puncts",  "Words per sentence" , "Commas per sentence" , "Puncts per sentence" , "Stops per sentence" ]:
 		for key, value in gp:
 			vals = value[feature]
-			vals = vals.replace([np.inf, -np.inf], np.nan)
-			vals = vals.dropna()
 			verbs = sorted(vals)
 			fit = stats.norm.pdf(verbs, np.mean(verbs), np.std(verbs)) 
 			#plt.plot(verbs,fit,'-o')
 			plt.plot(verbs,fit) 
+		plt.title(feature.replace("_" , " "))
 		plt.legend(groups)
-		#plt.show()    
+		plt.title(feature)
+		plt.xlabel(feature )
+		plt.ylabel("Frenquency")
+		plt.savefig("dist_" +  feature + ".png") 
+		plt.clf()
 
 
 
-def create_tree():
+def test_learning():
 
 	df = None
 	if os.path.exists("./authorsDF.p"):
 		df = pd.read_pickle("./authorsDF.p")
 	else:
 		df = pd.read_csv("./train.csv")
+		#df = df.ix[random.sample(df.index, 100)]
 		df = process_data(df)
 		df = df.replace([np.inf, -np.inf], np.nan)
 		df = df.dropna()
-		df = df.drop(["npl"], axis=1)
+		df = df.drop(["nlp"], axis=1)
 		df.to_pickle("./authorsDF.p")
 
 	
+	## Uncomment next 2 lines to plot distribution graphs 
+	#grouped = df.groupby("author")
+	#plot_group_data(grouped)
 
+	## Selected columns for prediction 
+	all_cols = ["freq_pred" ,"Noun Frequency" , "Adj Frequency" , "Verb Frequency" , "Adverb Frequency" , "PropN Frequency" ,  "Words per sentence" , "Commas per sentence" , "Puncts per sentence" , "Stops per sentence" ]
 	
 
+	#Selecting small random set to print Classification tree
+	df_small = df.ix[random.sample(df.index, 1000)]
 
-	grouped = df.groupby("author")
-	plot_group_data(grouped)
+	# Spliting train and test set 
+	train_X, test_X, train_Y, test_Y = train_test_split(df_small[all_cols], df_small["author"], random_state=1)
 
+	# Creating classification tree
+	clf_tree = tree.DecisionTreeClassifier()
+	clf_tree.fit(train_X, train_Y)
 
-
-
-	cols = ["freq_pred" , "words_per_sentence"  ,"puncts_per_sentence" , "commas_per_sentence", "verb_freq" , "adj_freq"]
-
-
-	train_X, test_X, train_Y, test_Y = train_test_split(df[cols], df["author"], random_state=1)
-
-	
-	
-	clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(15, 2), random_state=1)
-	clf.fit(train_X, train_Y)
-	prediction = clf.predict(test_X)
-	print accuracy_score(test_Y, prediction)
-
-	model = tree.DecisionTreeClassifier()
-	model.fit(train_X, train_Y)
-	#print model
-
-	dot_data = tree.export_graphviz(model, out_file=None,  feature_names=cols,  class_names=["EAP" , "HPL" , "MWS"],  
+	#Ploting and saving file
+	dot_data = tree.export_graphviz(clf_tree, out_file=None,  feature_names=all_cols,  class_names=["EAP" , "HPL" , "MWS"],  
                          filled=True, rounded=True,  
                          special_characters=True) 
-	#graph = graphviz.Source(dot_data)
-	#graph.render("author") 
-	#print graph
-
-	y_predict = model.predict(test_X)
+	graph = graphviz.Source(dot_data)
+	graph.render("ClassTree_autors") 
+	y_predict = clf_tree.predict(test_X)
 	accuracy  =accuracy_score(test_Y, y_predict)
-	print accuracy
+	print ("Classification tree accuracy: " + str(accuracy))
 
 
 
-def lemma_freq(lemmas, frequencies):
-	pred = pd.DataFrame(columns=['Prediction'])
-	for key in frequencies:
-		intersected = frequencies.get(key).filter(items=lemmas)
-		if len(intersected) < 1:
-			pred.loc[key] = 0.0
-		else:
-			pred.loc[key] = [intersected.sum()]
-	return pred.idxmax(axis=0)[0]
-
-def spacy_predictions():
-	df = pd.read_csv("./train.csv")
-	df = df.ix[np.random.choice(df.index, 1000)]
-	nlp = spacy.load("en")
-	authors = df.groupby("author")
-	group_tokens = {}
-	for key, value in authors:
-		all_text = value["text"].str.cat(sep=" ")
-		tokens = nlp(all_text.decode("UTF-8"))
-		lemmas = [token for token in tokens if not (token.is_stop or token.is_punct)]
-		group_tokens[key] = lemmas
-
-	frequencies = {}
-	for key, value in authors:
-		tokens = group_tokens[key]
-		counts = pd.Series(tokens).value_counts()
-		frequencies[key] = counts.div(len(tokens))
-
-	df["nlp"] = df["text"].apply(lambda x : nlp(x.decode("UTF-8")))
-	df["lemmas"] = df["nlp"].apply(lambda x: [token for token in x])
+	print ("Training all data Set")
+	##### training all set #####
+	#####                  #####
 
 
-	cols = ["lemmas"]
+	# Based on graphs and tree plot, the  following features were selected to get best accuracy avoiding overfitting 
+	cols = ["freq_pred" , "PropN Frequency" , "Commas per sentence" , "Words per sentence" , "Verb Frequency" , "Noun Frequency" ]
+	# Spliting train and test sets
 	train_X, test_X, train_Y, test_Y = train_test_split(df[cols], df["author"], random_state=1)
 
-	pred_Y = test_X["lemmas"].apply(lambda x: lemma_freq(x, frequencies))
-	print accuracy_score(test_Y, pred_Y)
+	
+	# Creating Decision tree
+	clf_tree = tree.DecisionTreeClassifier()
+	clf_tree.fit(train_X, train_Y)
+	predict_Y = clf_tree.predict(test_X)
+	accuracy  = accuracy_score(test_Y, predict_Y)
+	print ("Decision tree accuracy: " + str(accuracy))
+	confusion_matrix = pd.crosstab(test_Y, predict_Y)
+	confusion_matrix.index.name = "Actual"
+	confusion_matrix.columns.name = "Predicted"
+	plot_confusion_matrix(confusion_matrix)
+	plt.title("Decision Tree prediction", y=1.18)
+	plt.savefig("CM_DecisionTree.png")
+	plt.clf()
+	plt.close()
+
+	# Creating multilayer perceptron 
+	clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(7, 10), random_state=1)
+	clf.fit(train_X, train_Y)
+	predict_Y = clf.predict(test_X)
+	accuracy = accuracy_score(test_Y, predict_Y)
+	print ("MLP accuracy: " + str(accuracy))
+	confusion_matrix = pd.crosstab(test_Y, predict_Y)
+	confusion_matrix.index.name = "Actual"
+	confusion_matrix.columns.name = "Predicted"
+	plot_confusion_matrix(confusion_matrix)
+	plt.title("Multilayer Perceptron  prediction", y=1.18)
+	plt.savefig("CM_MLP.png")
+	plt.clf()
+	plt.close()
+
+
+	# Creating  Support Vector Machine
+	clf = svm.SVC(decision_function_shape='ovo')
+	clf.fit(train_X, train_Y)
+	predict_Y = clf.predict(test_X)
+	accuracy = accuracy_score(test_Y, predict_Y)
+	print ("SVM accuracy: " + str(accuracy))
+	confusion_matrix = pd.crosstab(test_Y, predict_Y)
+	confusion_matrix.index.name = "Actual"
+	confusion_matrix.columns.name = "Predicted"
+	plot_confusion_matrix(confusion_matrix)
+	plt.title("Support Vector Machineprediction", y=1.18)
+	plt.savefig("CM_SVM.png")
+	plt.clf()
+	plt.close()
+
 
 
 pd.options.mode.chained_assignment = None
-create_tree()
+
+
+test_learning()
 
